@@ -1,38 +1,103 @@
-name: Build and Deploy Nginx
+name: Deploy Nginx with Cortex XDR to GCE
 
 on:
   push:
-    branches: [main]
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Cortex API Config
+  XDR_API_URL: ${{ secrets.XDR_API_URL }}
+  AUTH_ID: ${{ secrets.AUTH_ID }}
+  AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
 
 jobs:
-  # CALL THE REUSABLE WORKFLOW
-  get-agent:
-    uses: davesadiv/reusable_xdr_agent_deployment-/.github/workflows/get-cortex-agent.yml@main
-    secrets:
-      XDR_API_URL: ${{ secrets.XDR_API_URL }}
-      AUTH_ID: ${{ secrets.AUTH_ID }}
-      AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
-
-  # BUILD THE APP
-  build-and-push:
-    needs: get-agent
+  # --- STAGE 1: FETCH CORTEX AGENT ---
+  fetch-agent:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Generate and Download Standalone Installer
+        run: |
+          # 1. Health Check
+          HEALTH_STATUS=$(curl -s -L "$XDR_API_URL/public_api/v1/healthcheck" \
+            -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" | jq -r '.status')
+          if [[ "$HEALTH_STATUS" != "available" ]]; then exit 1; fi
 
-      - name: Download Cortex Agent Artifact
+          # 2. Get Latest Linux Version
+          LATEST_VER=$(curl -s -X POST "$XDR_API_URL/public_api/v1/distributions/get_versions" \
+            -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -d '{}' \
+            | jq -r '.reply.linux[]' | tail -n 1)
+
+          # 3. Create Distribution
+          DIST_ID=$(curl -s -X POST "$XDR_API_URL/public_api/v1/distributions/create" \
+            -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" \
+            -d "{\"request_data\":{\"name\":\"CI-Build-$(date +%s)\",\"package_type\":\"sh\",\"agent_version\":\"$LATEST_VER\",\"platform\":\"linux\"}}" \
+            | jq -r '.reply.distribution_id')
+          
+          sleep 45 # Wait for package generation
+
+          # 4. Get Download URL & Download
+          DIST_URL=$(curl -s -X POST "$XDR_API_URL/public_api/v1/distributions/get_dist_url" \
+            -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" \
+            -d "{\"request_data\":{\"distribution_id\":\"$DIST_ID\",\"package_type\":\"sh\"}}" \
+            | jq -r '.reply.distribution_url')
+
+          curl -s -L -X POST "$DIST_URL" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -o ./cortex_agent.sh
+
+      - name: Upload Agent for Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-installer
+          path: ./cortex_agent.sh
+          retention-days: 1
+
+  # --- STAGE 2: BUILD AND PUSH IMAGE ---
+  build-image:
+    needs: fetch-agent
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Agent
         uses: actions/download-artifact@v4
         with:
           name: cortex-installer
-          path: .  # Downloads cortex_agent.sh into the build context
+          path: .
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: my-registry/nginx-cortex:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  # --- STAGE 3: DEPLOY TO GCP ---
+  deploy-gcp:
+    needs: build-image
+    runs-on: ubuntu-latest
+    environment: production # Uses Environment Secrets
+    steps:
+      - id: 'auth'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_KEY }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+
+      - name: 'Update GCE Container'
+        run: |
+          gcloud compute instances update-container "${{ secrets.COMPUTE_NAME }}" \
+            --zone "${{ secrets.ZONE }}" \
+            --container-image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
