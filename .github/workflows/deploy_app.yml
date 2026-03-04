@@ -16,6 +16,7 @@ jobs:
   # --- STAGE 1: FETCH CORTEX AGENT ---
   fetch-agent:
     runs-on: ubuntu-latest
+    environment: Cortex # Uses Environment Secrets
     steps:
       - name: Generate and Download Standalone Installer
         run: |
@@ -56,6 +57,7 @@ jobs:
   build-image:
     needs: fetch-agent
     runs-on: ubuntu-latest
+    environment: Cortex # Uses Environment Secrets
     permissions:
       contents: read
       packages: write
