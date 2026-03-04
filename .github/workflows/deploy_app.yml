@@ -7,23 +7,27 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  # Cortex API Config
-  XDR_API_URL: ${{ secrets.XDR_API_URL }}
-  AUTH_ID: ${{ secrets.AUTH_ID }}
-  AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
 
 jobs:
   # --- STAGE 1: FETCH CORTEX AGENT ---
   fetch-agent:
     runs-on: ubuntu-latest
-    environment: Cortex # Uses Environment Secrets
+    environment: Cortex  # <--- This triggers access to the secrets in your screenshot
     steps:
       - name: Generate and Download Standalone Installer
+        env:
+          # Pulling secrets here inside the job that has the environment context
+          XDR_API_URL: ${{ secrets.XDR_API_URL }}
+          AUTH_ID: ${{ secrets.AUTH_ID }}
+          AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         run: |
           # 1. Health Check
           HEALTH_STATUS=$(curl -s -L "$XDR_API_URL/public_api/v1/healthcheck" \
             -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" | jq -r '.status')
-          if [[ "$HEALTH_STATUS" != "available" ]]; then exit 1; fi
+          if [[ "$HEALTH_STATUS" != "available" ]]; then 
+            echo "API Health Check Failed: $HEALTH_STATUS"
+            exit 1
+          fi
 
           # 2. Get Latest Linux Version
           LATEST_VER=$(curl -s -X POST "$XDR_API_URL/public_api/v1/distributions/get_versions" \
@@ -36,7 +40,8 @@ jobs:
             -d "{\"request_data\":{\"name\":\"CI-Build-$(date +%s)\",\"package_type\":\"sh\",\"agent_version\":\"$LATEST_VER\",\"platform\":\"linux\"}}" \
             | jq -r '.reply.distribution_id')
           
-          sleep 45 # Wait for package generation
+          echo "Distribution created: $DIST_ID. Waiting 45s for preparation..."
+          sleep 45
 
           # 4. Get Download URL & Download
           DIST_URL=$(curl -s -X POST "$XDR_API_URL/public_api/v1/distributions/get_dist_url" \
@@ -57,7 +62,7 @@ jobs:
   build-image:
     needs: fetch-agent
     runs-on: ubuntu-latest
-    environment: Cortex # Uses Environment Secrets
+    environment: Cortex
     permissions:
       contents: read
       packages: write
@@ -82,13 +87,14 @@ jobs:
         with:
           context: .
           push: true
+          # Note: IMAGE_NAME env from top-level works here
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
   # --- STAGE 3: DEPLOY TO GCP ---
   deploy-gcp:
     needs: build-image
     runs-on: ubuntu-latest
-    environment: Cortex # Uses Environment Secrets
+    environment: Cortex
     steps:
       - id: 'auth'
         uses: 'google-github-actions/auth@v2'
@@ -100,6 +106,7 @@ jobs:
 
       - name: 'Update GCE Container'
         run: |
+          # Ensure ZONE secret is also in your 'Cortex' environment secrets
           gcloud compute instances update-container "${{ secrets.COMPUTE_NAME }}" \
             --zone "${{ secrets.ZONE }}" \
             --container-image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
