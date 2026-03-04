@@ -34,7 +34,7 @@ jobs:
             -d "{\"request_data\":{\"name\":\"CI-Build-$(date +%s)\",\"package_type\":\"sh\",\"agent_version\":\"$LATEST_VER\",\"platform\":\"linux\"}}" \
             | jq -r '.reply.distribution_id')
           
-          echo "Waiting 45s for preparation..." && sleep 45
+          echo "Waiting 120s for preparation..." && sleep 120
 
           DIST_URL=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_dist_url" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" \
