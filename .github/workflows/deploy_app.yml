@@ -12,7 +12,7 @@ jobs:
   # --- STAGE 1: HEALTHCHECK ---
   xdr-api-healthcheck:
     runs-on: ubuntu-latest
-    environment: Cortex # Accesses secrets from your environment
+    environment: Cortex
     steps:
       - name: Verify Cortex XDR API Connectivity
         env:
@@ -21,7 +21,6 @@ jobs:
           AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         run: |
           set -e
-          # Sanitize URL to prevent DNS resolution errors (Exit Code 6)
           BASE_URL=$(echo $XDR_API_URL | sed 's:/*$::')
           
           echo "Verifying API at $BASE_URL..."
@@ -63,10 +62,10 @@ jobs:
           LATEST_VER=$(echo "$agent_versions" | jq -r ".reply.\"$OS_TYPE\"[]" | tail -n 1)
           echo "Latest Version: $LATEST_VER"
 
-          echo "Step 2: Create distribution (sh)"
-          # Requesting 'sh' standalone Linux installer for single host container
+          echo "Step 2: Create distribution (standalone)"
+          # Changed package_type to 'standalone' to resolve API Error 400
           PAYLOAD=$(jq -n --arg run "$GITHUB_RUN_ID" --arg ver "$LATEST_VER" \
-            '{request_data: {name: ("GH-Action-" + $run), package_type: "sh", agent_version: $ver, platform: "linux"}}')
+            '{request_data: {name: ("GH-Action-" + $run), package_type: "standalone", agent_version: $ver, platform: "linux"}}')
 
           dist_res=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/create" \
             -H "Content-Type: application/json" \
@@ -86,13 +85,21 @@ jobs:
           sleep 60
 
           echo "Step 3: Download package"
+          # package_type here must also be 'standalone'
           url_res=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_dist_url" \
             -H "Content-Type: application/json" \
             -H "x-xdr-auth-id: $AUTH_ID" \
             -H "Authorization: $AUTH_TOKEN" \
-            -d "{\"request_data\": {\"distribution_id\": \"$DIST_ID\", \"package_type\": \"sh\"}}")
+            -d "{\"request_data\": {\"distribution_id\": \"$DIST_ID\", \"package_type\": \"standalone\"}}")
           
           DIST_URL=$(echo "$url_res" | jq -r '.reply.distribution_url')
+          
+          if [ "$DIST_URL" == "null" ]; then
+            echo "Error: Download URL not ready."
+            echo "$url_res"
+            exit 1
+          fi
+
           curl -s -L -X POST "$DIST_URL" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -o ./cortex_agent.sh
 
       - name: Upload Agent
@@ -117,7 +124,7 @@ jobs:
       - id: 'auth'
         uses: 'google-github-actions/auth@v2'
         with:
-          credentials_json: '${{ secrets.GCP_KEY }}' # Accesses GCP_KEY from your environment
+          credentials_json: '${{ secrets.GCP_KEY }}'
       - name: 'Docker Auth to GAR'
         run: gcloud auth configure-docker ${{ env.GAR_LOCATION }}-docker.pkg.dev --quiet
       - name: Build and Push
@@ -140,7 +147,6 @@ jobs:
           credentials_json: '${{ secrets.GCP_KEY }}'
       - name: 'Update GCE Container'
         run: |
-          # Deploys image to your single container GCE VM
           gcloud compute instances update-container "${{ secrets.COMPUTE_NAME }}" \
             --zone "us-central1-a" \
             --container-image "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_NAME }}/${{ env.GAR_REPO }}/${{ secrets.IMAGE_NAME }}:latest"
