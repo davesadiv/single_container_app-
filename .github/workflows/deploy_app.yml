@@ -62,8 +62,8 @@ jobs:
             -d "{\"request_data\":{\"name\":\"CI-Build-$(date +%s)\",\"package_type\":\"sh\",\"agent_version\":\"$LATEST_VER\",\"platform\":\"linux\"}}" \
             | jq -r '.reply.distribution_id')
           
-          echo "Package requested (ID: $DIST_ID). Waiting 120s for preparation..."
-          sleep 120
+          echo "Package requested (ID: $DIST_ID). Waiting 60s for preparation..."
+          sleep 60
 
           # Retrieve Download URL
           DIST_URL=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_dist_url" \
