@@ -5,8 +5,8 @@ on:
     branches: [ "main" ]
 
 env:
-  GAR_LOCATION: us-central1   # Update to your GAR region
-  GAR_REPO: ew-acr       # Your Artifact Registry repository name
+  GAR_LOCATION: us-central1
+  GAR_REPO: ew-acr
 
 jobs:
   # --- STAGE 1: HEALTHCHECK ---
@@ -21,10 +21,10 @@ jobs:
           AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         run: |
           set -e
-          # Clean trailing slash to prevent resolution errors (Exit Code 6)
+          # Sanitize URL to prevent DNS resolution errors (Exit Code 6)
           BASE_URL=$(echo $XDR_API_URL | sed 's:/*$::')
           
-          echo "Verifying Cortex XDR API connectivity at $BASE_URL..."
+          echo "Verifying API at $BASE_URL..."
           health_response=$(curl -s "$BASE_URL/public_api/v1/healthcheck" \
             -H "Accept: application/json" \
             -H "x-xdr-auth-id: $AUTH_ID" \
@@ -32,10 +32,9 @@ jobs:
           
           STATUS=$(echo "$health_response" | jq -r '.status')
           if [ "$STATUS" != "available" ]; then
-            echo "API is not available. Status: $STATUS"
+            echo "API Unavailable: $STATUS"
             exit 1
           fi
-          echo "API is healthy."
 
   # --- STAGE 2: FETCH CORTEX AGENT ---
   fetch-agent:
@@ -60,12 +59,12 @@ jobs:
             -H "Authorization: $AUTH_TOKEN" \
             -d '{}')
           
-          latest_agent_version=$(echo "$agent_versions" | jq -r ".reply.\"$OS_TYPE\"[]" | tail -n 1)
-          echo "Latest Version: $latest_agent_version"
+          LATEST_VER=$(echo "$agent_versions" | jq -r ".reply.\"$OS_TYPE\"[]" | tail -n 1)
+          echo "Latest Version: $LATEST_VER"
 
-          echo "Step 2: Create distribution (standalone sh)"
-          # Using 'sh' for standalone Linux installer required for single host
-          PAYLOAD=$(jq -n --arg run "$GITHUB_RUN_ID" --arg ver "$latest_agent_version" \
+          echo "Step 2: Create distribution (sh)"
+          # Requesting 'sh' standalone Linux installer for single host container
+          PAYLOAD=$(jq -n --arg run "$GITHUB_RUN_ID" --arg ver "$LATEST_VER" \
             '{request_data: {name: ("GH-Action-" + $run), package_type: "sh", agent_version: $ver, platform: "linux"}}')
 
           dist_res=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/create" \
@@ -74,11 +73,10 @@ jobs:
             -H "Authorization: $AUTH_TOKEN" \
             -d "$PAYLOAD")
           
-          dist_id=$(echo "$dist_res" | jq -r '.reply.distribution_id // empty')
-          
-          if [ -z "$dist_id" ]; then exit 1; fi
+          DIST_ID=$(echo "$dist_res" | jq -r '.reply.distribution_id // empty')
+          [ -z "$DIST_ID" ] && { echo "Failed to get DIST_ID"; exit 1; }
 
-          echo "Waiting 60s for backend..."
+          echo "Waiting 60s for distribution preparation..."
           sleep 60
 
           echo "Step 3: Download package"
@@ -86,16 +84,12 @@ jobs:
             -H "Content-Type: application/json" \
             -H "x-xdr-auth-id: $AUTH_ID" \
             -H "Authorization: $AUTH_TOKEN" \
-            -d "{\"request_data\": {\"distribution_id\": \"$dist_id\", \"package_type\": \"sh\"}}")
+            -d "{\"request_data\": {\"distribution_id\": \"$DIST_ID\", \"package_type\": \"sh\"}}")
           
-          dist_url=$(echo "$url_res" | jq -r '.reply.distribution_url')
+          DIST_URL=$(echo "$url_res" | jq -r '.reply.distribution_url')
+          curl -s -L -X POST "$DIST_URL" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -o ./cortex_agent.sh
 
-          curl -s -L -X POST "$dist_url" \
-            -H "x-xdr-auth-id: $AUTH_ID" \
-            -H "Authorization: $AUTH_TOKEN" \
-            -o ./cortex_agent.sh
-
-      - name: Upload Agent for Build
+      - name: Upload Agent
         uses: actions/upload-artifact@v4
         with:
           name: cortex-installer
@@ -140,7 +134,7 @@ jobs:
           credentials_json: '${{ secrets.GCP_KEY }}'
       - name: 'Update GCE Container'
         run: |
-          # Deploys image to single container host
+          # Deploys image to your single container GCE VM
           gcloud compute instances update-container "${{ secrets.COMPUTE_NAME }}" \
             --zone "us-central1-a" \
             --container-image "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_NAME }}/${{ env.GAR_REPO }}/${{ secrets.IMAGE_NAME }}:latest"
