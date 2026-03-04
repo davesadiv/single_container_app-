@@ -1,14 +1,13 @@
-name: Deploy Nginx with Cortex XDR to GCE
+name: Deploy Nginx with Cortex XDR to GCE (GAR)
 
 on:
   push:
     branches: [ "main" ]
 
 env:
-  GAR_LOCATION: us-central1 
-  GAR_REPO: ew-acr     
-  # We pull IMAGE_NAME from your Environment Secrets
-  
+  GAR_LOCATION: us-central1   # Update to your GAR region
+  GAR_REPO: ew-acr       # Your Artifact Registry repository name
+
 jobs:
   # --- STAGE 1: FETCH CORTEX AGENT ---
   fetch-agent:
@@ -17,30 +16,34 @@ jobs:
     steps:
       - name: Generate and Download Standalone Installer
         env:
-          # Using secrets from your 'Cortex' environment
           XDR_API_URL: ${{ secrets.XDR_API_URL }}
           AUTH_ID: ${{ secrets.AUTH_ID }}
           AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         run: |
-          # Remove trailing slash if present to avoid Exit Code 6
+          # Clean the URL to avoid Exit Code 6 (Resolution failure)
           BASE_URL=$(echo $XDR_API_URL | sed 's:/*$::')
 
+          # 1. Get Latest Version
           LATEST_VER=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_versions" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -d '{}' \
             | jq -r '.reply.linux[]' | tail -n 1)
 
+          # 2. Create Distribution Package
           DIST_ID=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/create" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" \
             -d "{\"request_data\":{\"name\":\"CI-Build-$(date +%s)\",\"package_type\":\"sh\",\"agent_version\":\"$LATEST_VER\",\"platform\":\"linux\"}}" \
             | jq -r '.reply.distribution_id')
           
-          echo "Waiting 120s for preparation..." && sleep 120
+          echo "Package requested (ID: $DIST_ID). Waiting 120s for preparation..."
+          sleep 120
 
+          # 3. Retrieve Download URL
           DIST_URL=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_dist_url" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" \
             -d "{\"request_data\":{\"distribution_id\":\"$DIST_ID\",\"package_type\":\"sh\"}}" \
             | jq -r '.reply.distribution_url')
 
+          # 4. Download the actual .sh installer
           curl -s -L -X POST "$DIST_URL" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -o ./cortex_agent.sh
 
       - name: Upload Agent for Build
@@ -93,7 +96,7 @@ jobs:
 
       - name: 'Update GCE Container'
         run: |
-          # Note: Added fallback for ZONE if not in secrets
+          # Deploys to the single container host
           gcloud compute instances update-container "${{ secrets.COMPUTE_NAME }}" \
-            --zone "${{ secrets.ZONE || 'us-central1-a' }}" \
+            --zone "us-central1-a" \
             --container-image "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_NAME }}/${{ env.GAR_REPO }}/${{ secrets.IMAGE_NAME }}:latest"
