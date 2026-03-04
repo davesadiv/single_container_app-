@@ -7,7 +7,7 @@ on:
 jobs:
   # CALL THE REUSABLE WORKFLOW
   get-agent:
-    uses: my-org/shared-workflows/.github/workflows/get-cortex-agent.yml@main
+    uses: davesadiv/reusable_xdr_agent_deployment-/.github/workflows/get-cortex-agent.yml@main
     secrets:
       XDR_API_URL: ${{ secrets.XDR_API_URL }}
       AUTH_ID: ${{ secrets.AUTH_ID }}
