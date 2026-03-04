@@ -1,16 +1,18 @@
-FROM nginx:stable-alpine
+FROM nginx:latest
 
-# Install dependencies for the agent (Alpine uses different libs than Ubuntu)
-RUN apk add --no-cache bash curl openssl
+# Install dependencies for Cortex
+RUN apt-get update && apt-get install -y openssl libcurl4 jq && rm -rf /var/lib/apt/lists/*
 
-# The workflow will place this file here during the build
+# Copy installer from the GH Action
 COPY cortex_agent.sh /tmp/cortex_agent.sh
 
-# Install the agent and cleanup
+# Install agent (installer usually starts the service automatically)
 RUN chmod +x /tmp/cortex_agent.sh && \
     /tmp/cortex_agent.sh && \
     rm /tmp/cortex_agent.sh
 
-EXPOSE 80
-# Cortex usually runs as a background daemon; Nginx runs in foreground
-CMD ["nginx", "-g", "daemon off;"]
+# Copy your entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
