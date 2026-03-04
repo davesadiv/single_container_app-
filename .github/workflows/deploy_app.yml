@@ -5,8 +5,8 @@ on:
     branches: [ "main" ]
 
 env:
-  GAR_LOCATION: us-central1   # Update if your Artifact Registry is in a different region
-  GAR_REPO: ew-acr       # Your Artifact Registry repository name
+  GAR_LOCATION: us-central1
+  GAR_REPO: ew-acr
 
 jobs:
   # --- STAGE 1: HEALTHCHECK ---
@@ -21,7 +21,7 @@ jobs:
           AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         run: |
           set -e
-          # Sanitize URL to prevent DNS resolution errors (Exit Code 6)
+          # Strip trailing slash to fix DNS resolution (Exit Code 6)
           BASE_URL=$(echo $XDR_API_URL | sed 's:/*$::')
           
           health_response=$(curl -s "$BASE_URL/public_api/v1/healthcheck" \
@@ -29,8 +29,8 @@ jobs:
             -H "x-xdr-auth-id: $AUTH_ID" \
             -H "Authorization: $AUTH_TOKEN")
           
-          STATUS=$(echo "$health_response" | jq -r '.status')
-          if [ "$STATUS" != "available" ]; then exit 1; fi
+          [ "$(echo "$health_response" | jq -r '.status')" != "available" ] && exit 1
+          echo "API is healthy."
 
   # --- STAGE 2: FETCH CORTEX AGENT ---
   fetch-agent:
@@ -50,31 +50,29 @@ jobs:
           echo "Step 1: Fetch latest agent version"
           agent_versions=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_versions" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -d '{}')
-          
           LATEST_VER=$(echo "$agent_versions" | jq -r '.reply.linux[]' | tail -n 1)
           echo "Latest Version: $LATEST_VER"
 
           echo "Step 2: Create distribution (standalone)"
-          # API requires 'standalone' for this specific creation step
+          # API requires 'standalone' for creation
           PAYLOAD=$(jq -n --arg run "$GITHUB_RUN_ID" --arg ver "$LATEST_VER" \
             '{request_data: {name: ("GH-Action-" + $run), package_type: "standalone", agent_version: $ver, platform: "linux"}}')
 
           dist_res=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/create" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -d "$PAYLOAD")
-          
           DIST_ID=$(echo "$dist_res" | jq -r '.reply.distribution_id // empty')
-          if [ -z "$DIST_ID" ]; then exit 1; fi
+          [ -z "$DIST_ID" ] && { echo "Failed to get DIST_ID"; echo "$dist_res"; exit 1; }
 
-          echo "Waiting 160s for distribution preparation..."
+          echo "Waiting 160s for preparation..."
           sleep 160
 
           echo "Step 3: Download package (sh)"
-          # API requires 'sh' for this specific download URL retrieval step
+          # API requires 'sh' for download URL retrieval
           url_res=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_dist_url" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" \
             -d "{\"request_data\": {\"distribution_id\": \"$DIST_ID\", \"package_type\": \"sh\"}}")
-          
           DIST_URL=$(echo "$url_res" | jq -r '.reply.distribution_url')
+          
           curl -s -L -X POST "$DIST_URL" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -o ./cortex_agent.sh
 
       - name: Upload Agent
@@ -96,40 +94,12 @@ jobs:
         with:
           name: cortex-installer
           path: .
-      
       - id: 'auth'
         uses: 'google-github-actions/auth@v2'
         with:
           credentials_json: '${{ secrets.GCP_KEY }}'
-
-      - name: 'Docker Auth to GAR'
-        run: gcloud auth configure-docker ${{ env.GAR_LOCATION }}-docker.pkg.dev --quiet
-
+      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and Push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          # Forces x86_64 architecture to fix the 'Exec format error' (Exit Code 126)
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_NAME }}/${{ env.GAR_REPO }}/${{ secrets.IMAGE_NAME }}:latest
-
-  # --- STAGE 4: DEPLOY TO GCE ---
-  deploy-gcp:
-    needs: build-image
-    runs-on: ubuntu-latest
-    environment: Cortex
-    steps:
-      - id: 'auth'
-        uses: 'google-github-actions/auth@v2'
-        with:
-          credentials_json: '${{ secrets.GCP_KEY }}'
-      - name: 'Update GCE Container'
-        run: |
-          gcloud compute instances update-container "${{ secrets.COMPUTE_NAME }}" \
-            --zone "us-central1-a" \
-            --container-image "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_NAME }}/${{ env.GAR_REPO }}/${{ secrets.IMAGE_NAME }}:latest"
+      - name: 'Docker Auth to
