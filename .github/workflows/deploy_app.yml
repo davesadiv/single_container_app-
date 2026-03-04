@@ -65,8 +65,8 @@ jobs:
           DIST_ID=$(echo "$dist_res" | jq -r '.reply.distribution_id // empty')
           [ -z "$DIST_ID" ] && { echo "Failed to get DIST_ID"; echo "$dist_res"; exit 1; }
 
-          echo "Waiting 120s for preparation..."
-          sleep 120
+          echo "Waiting 160s for preparation..."
+          sleep 160
 
           echo "Step 3: Download package (sh)"
           # 'sh' is required for the download URL retrieval
