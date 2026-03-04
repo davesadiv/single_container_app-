@@ -86,7 +86,7 @@ jobs:
   deploy-gcp:
     needs: build-image
     runs-on: ubuntu-latest
-    environment: production # Uses Environment Secrets
+    environment: Cortex # Uses Environment Secrets
     steps:
       - id: 'auth'
         uses: 'google-github-actions/auth@v2'
