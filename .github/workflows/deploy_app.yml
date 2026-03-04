@@ -21,7 +21,7 @@ jobs:
           AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
         run: |
           set -e
-          # Clean URL to prevent DNS resolution errors (Exit Code 6)
+          # Clean trailing slash to prevent resolution errors (Exit Code 6)
           BASE_URL=$(echo $XDR_API_URL | sed 's:/*$::')
           
           health_response=$(curl -s "$BASE_URL/public_api/v1/healthcheck" \
@@ -29,8 +29,8 @@ jobs:
             -H "x-xdr-auth-id: $AUTH_ID" \
             -H "Authorization: $AUTH_TOKEN")
           
-          [ "$(echo "$health_response" | jq -r '.status')" != "available" ] && exit 1
-          echo "API is healthy."
+          STATUS=$(echo "$health_response" | jq -r '.status')
+          if [ "$STATUS" != "available" ]; then exit 1; fi
 
   # --- STAGE 2: FETCH CORTEX AGENT ---
   fetch-agent:
@@ -55,7 +55,7 @@ jobs:
           echo "Latest Version: $LATEST_VER"
 
           echo "Step 2: Create distribution (standalone)"
-          # 'standalone' is required for creation
+          # API requires 'standalone' for the creation payload
           PAYLOAD=$(jq -n --arg run "$GITHUB_RUN_ID" --arg ver "$LATEST_VER" \
             '{request_data: {name: ("GH-Action-" + $run), package_type: "standalone", agent_version: $ver, platform: "linux"}}')
 
@@ -63,19 +63,19 @@ jobs:
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -d "$PAYLOAD")
           
           DIST_ID=$(echo "$dist_res" | jq -r '.reply.distribution_id // empty')
-          [ -z "$DIST_ID" ] && { echo "Failed to get DIST_ID"; echo "$dist_res"; exit 1; }
+          if [ -z "$DIST_ID" ]; then echo "Error: $dist_res"; exit 1; fi
 
-          echo "Waiting 160s for preparation..."
+          echo "Waiting 160s for distribution preparation..."
           sleep 160
 
           echo "Step 3: Download package (sh)"
-          # 'sh' is required for the download URL retrieval
+          # API requires 'sh' for the download URL retrieval payload
           url_res=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_dist_url" \
             -H "Content-Type: application/json" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" \
             -d "{\"request_data\": {\"distribution_id\": \"$DIST_ID\", \"package_type\": \"sh\"}}")
           
           DIST_URL=$(echo "$url_res" | jq -r '.reply.distribution_url')
-          [ "$DIST_URL" == "null" ] && { echo "Download URL not ready"; exit 1; }
+          if [ "$DIST_URL" == "null" ]; then exit 1; fi
 
           curl -s -L -X POST "$DIST_URL" -H "x-xdr-auth-id: $AUTH_ID" -H "Authorization: $AUTH_TOKEN" -o ./cortex_agent.sh
 
@@ -111,7 +111,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          # Force the platform to linux/amd64 to avoid Exec Format Errors
+          # Forces x86_64 architecture to fix 'Exec format error'
           platforms: linux/amd64
           push: true
           tags: |
@@ -127,7 +127,6 @@ jobs:
         uses: 'google-github-actions/auth@v2'
         with:
           credentials_json: '${{ secrets.GCP_KEY }}'
-          
       - name: 'Update GCE Container'
         run: |
           gcloud compute instances update-container "${{ secrets.COMPUTE_NAME }}" \
