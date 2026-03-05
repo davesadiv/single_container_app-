@@ -76,7 +76,7 @@ jobs:
           path: ./cortex_agent.sh
           retention-days: 1
 
-  # --- STAGE 3: BUILD AND PUSH (Fix Architecture) ---
+  # --- STAGE 3: BUILD AND PUSH ---
   build-image:
     needs: fetch-agent
     runs-on: ubuntu-latest
@@ -100,7 +100,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          # REQUIRED: Force AMD64 to fix 'Exec format error'
+          # REQUIRED: Force AMD64 to match the Cortex binary and fix 'Exec format error'
           platforms: linux/amd64
           push: true
           tags: |
