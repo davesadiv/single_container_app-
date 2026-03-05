@@ -29,7 +29,7 @@ jobs:
           [ "$(echo "$health_response" | jq -r '.status')" != "available" ] && exit 1
           echo "API is healthy."
 
-  # --- STAGE 2: FETCH CORTEX AGENT (Fixed API Types) ---
+  # --- STAGE 2: FETCH CORTEX AGENT ---
   fetch-agent:
     needs: xdr-api-healthcheck
     runs-on: ubuntu-latest
@@ -76,7 +76,7 @@ jobs:
           path: ./cortex_agent.sh
           retention-days: 1
 
-  # --- STAGE 3: BUILD AND PUSH (Fixed Architecture) ---
+  # --- STAGE 3: BUILD AND PUSH ---
   build-image:
     needs: fetch-agent
     runs-on: ubuntu-latest
@@ -100,6 +100,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          # REQUIRED: Force AMD64 to match the Cortex binary and fix 'Exec format error'
           platforms: linux/amd64
           push: true
           tags: |
