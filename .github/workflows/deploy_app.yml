@@ -58,8 +58,8 @@ jobs:
           DIST_ID=$(echo "$dist_res" | jq -r '.reply.distribution_id // empty')
           [ -z "$DIST_ID" ] && exit 1
 
-          echo "Waiting 120s for preparation..."
-          sleep 120
+          echo "Waiting 160s for preparation..."
+          sleep 160
 
           echo "Step 3: Download package (sh)"
           url_res=$(curl -s -X POST "$BASE_URL/public_api/v1/distributions/get_dist_url" \
